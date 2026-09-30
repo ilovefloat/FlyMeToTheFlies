@@ -1,0 +1,2 @@
+flybody @ git+https://github.com/TuragaLab/flybody.git
+pygame>=2.6,<3
