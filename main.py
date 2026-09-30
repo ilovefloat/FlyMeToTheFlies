@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 import random
 import time
-import zipfile
 from pathlib import Path
 
 import h5py
@@ -204,11 +203,12 @@ def build_environment():
         contype=0, conaffinity=0,
     )
 
-    return composer.Environment(
+    env = composer.Environment(
         task=task,
         time_limit=float("inf"),
         strip_singleton_obs_buffer_dim=True,
     )
+    return env, task, wbpg
 
 
 def _free_joint_qpos_address(physics) -> int:
@@ -271,6 +271,18 @@ class FlightReplay:
 
                 root_qpos = com2root(qpos[:, :3], qpos[:, 3:7])
                 relative_position = root_qpos[:, :3] - root_qpos[0, :3]
+
+                # Fit each measured route into the room before replaying it.
+                # Clipping every frame would create abrupt stops at the walls.
+                safe_x = ROOM_HALF_X - 0.65
+                safe_y = ROOM_HALF_Y - 0.65
+                max_x = float(np.max(np.abs(relative_position[:, 0])))
+                max_y = float(np.max(np.abs(relative_position[:, 1])))
+                scale_x = safe_x / max_x if max_x > safe_x else 1.0
+                scale_y = safe_y / max_y if max_y > safe_y else 1.0
+                scale = min(scale_x, scale_y, 1.0)
+                relative_position[:, :2] *= scale
+
                 self.routes.append({
                     "id": route_id,
                     "position": relative_position,
@@ -281,7 +293,7 @@ class FlightReplay:
         if not self.routes:
             raise RuntimeError("No usable flight trajectories were found")
 
-        self.position = np.zeros(3)
+        self.position = np.array([0.0, 0.0, 0.16], dtype=float)
         self.quaternion = np.array([1.0, 0.0, 0.0, 0.0])
         self.route = None
         self.route_start = np.zeros(3)
@@ -289,6 +301,7 @@ class FlightReplay:
         self.state = GROUNDED_STATE
         self.state_time = 0.0
         self.next_flight_delay = random.uniform(0.7, 2.0)
+        self.flight_height_offset = 1.0
 
     def _choose_route(self) -> None:
         self.route = random.choice(self.routes)
@@ -336,22 +349,17 @@ class FlightReplay:
             if progress >= 1.0:
                 self.state = FLIGHT_STATE
                 self.state_time = 0.0
+                # The measured route starts at zero displacement. Offset its
+                # vertical origin so the first replay frame follows takeoff.
+                self.route_start = self.position.copy()
+                self.route_start[2] -= self.flight_height_offset
 
         elif self.state == FLIGHT_STATE:
             self.route_time += dt
             local_position, quaternion = self._sample_route(self.route_time)
             self.position = self.route_start + local_position
-
-            # Keep the measured motion inside the game room.
-            margin = 0.35
-            self.position[0] = np.clip(
-                self.position[0], -ROOM_HALF_X + margin, ROOM_HALF_X - margin
-            )
-            self.position[1] = np.clip(
-                self.position[1], -ROOM_HALF_Y + margin, ROOM_HALF_Y - margin
-            )
             self.position[2] = np.clip(
-                self.position[2] + 1.0, 0.45, ROOM_HEIGHT - 0.35
+                self.position[2], 0.45, ROOM_HEIGHT - 0.40
             )
             self.quaternion = quaternion
 
@@ -385,7 +393,7 @@ def main() -> None:
     font = pygame.font.Font(None, 28)
     big_font = pygame.font.Font(None, 64)
 
-    env = build_environment()
+    env, task, wbpg = build_environment()
     camera_id = env.physics.model.name2id("game_camera", "camera")
     set_swatter(env.physics, SWATTER_START)
 
@@ -397,6 +405,11 @@ def main() -> None:
     caught = False
     running = True
     attacking = 0.0
+    wing_time = 0.0
+    wing_dt = float(wbpg._dt_ctrl)
+    wing_qpos = wbpg.reset(initial_phase=random.random())
+    physics_wings = env.physics.bind(task._wing_joints)
+    physics_wings.qpos = wing_qpos
 
     pygame.event.set_grab(True)
     pygame.mouse.set_visible(False)
@@ -435,6 +448,16 @@ def main() -> None:
                 fly_quaternion_from_dataset(fly_quaternion),
                 fly_position,
             )
+
+            # WPG runs at the flight control timestep, not the game's 60 FPS.
+            # Advance it by elapsed real time so the six wing joints flap at
+            # the intended frequency.
+            if fly_state in (TAKEOFF_STATE, FLIGHT_STATE, LANDING_STATE):
+                wing_time += dt
+                while wing_time >= wing_dt:
+                    wing_qpos = wbpg.step(wbpg.base_beat_freq)
+                    wing_time -= wing_dt
+                physics_wings.qpos = wing_qpos
 
             env.physics.named.model.cam_pos[camera_id] = player_position
             env.physics.named.model.cam_quat[camera_id] = camera_quaternion(yaw, pitch)
