@@ -98,7 +98,7 @@ class Room(floors.Floor):
             specular=(0.25, 0.25, 0.25),
         )
 
-        camera_pos = np.array([3.7, -5.2, 3.0])
+        camera_pos = np.array([1.65, -1.65, 1.85])
         target = np.array([0.0, 0.0, 0.85])
         world.add(
             "camera", name="game_camera",
