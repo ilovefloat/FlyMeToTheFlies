@@ -14,6 +14,7 @@ from dm_control.locomotion.arenas import floors
 from flybody.fruitfly import fruitfly
 from flybody.tasks.flight_imitation import FlightImitationWBPG
 from flybody.tasks.pattern_generators import WingBeatPatternGenerator
+from flybody.tasks.trajectory_loaders import InferenceFlightTrajectoryLoader
 
 
 WINDOW_WIDTH = 1100
@@ -166,10 +167,13 @@ def build_environment():
     arena = Room()
     wbpg = WingBeatPatternGenerator()
 
+    trajectory_loader = InferenceFlightTrajectoryLoader()
+
     task = FlightImitationWBPG(
         walker=fruitfly.FruitFly,
         arena=arena,
         wbpg=wbpg,
+        traj_generator=trajectory_loader,
         terminal_com_dist=float("inf"),
         disable_legs=False,
         floor_contacts=False,
