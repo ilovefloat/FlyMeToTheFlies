@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pygame
 from dm_control import composer
-from dm_control.composer import arenas
+from dm_control.locomotion.arenas import floors
 from flybody.fruitfly import fruitfly
 from flybody.tasks.flight_imitation import FlightImitationWBPG
 from flybody.tasks.pattern_generators import WingBeatPatternGenerator
@@ -36,7 +36,7 @@ def camera_xyaxes(camera_pos: np.ndarray, target: np.ndarray) -> tuple[float, ..
     return tuple(np.concatenate((right, up)))
 
 
-class Room(arenas.Floor):
+class Room(floors.Floor):
     def __init__(self) -> None:
         super().__init__(name="room")
         world = self.mjcf_model.worldbody
