@@ -249,6 +249,19 @@ def _normalize_quaternion(quat: np.ndarray) -> np.ndarray:
     return quat / norm if norm > 1e-9 else np.array([1.0, 0.0, 0.0, 0.0])
 
 
+def _multiply_quaternion(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    return _normalize_quaternion(np.array([
+        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+    ]))
+
+
+def _inverse_quaternion(quat: np.ndarray) -> np.ndarray:
+    return np.array([quat[0], -quat[1], -quat[2], -quat[3]])
+
+
 def _interpolate_quaternion(a: np.ndarray, b: np.ndarray, alpha: float) -> np.ndarray:
     b = b.copy()
     if float(np.dot(a, b)) < 0:
@@ -312,11 +325,16 @@ class FlightReplay:
         self.state_time = 0.0
         self.next_flight_delay = random.uniform(0.7, 2.0)
         self.flight_height_offset = 1.0
+        self.route_base_quaternion = self.quaternion.copy()
+        self.flight_segments = 0
+        self.max_flight_segments = random.randint(3, 5)
 
     def _choose_route(self) -> None:
         self.route = random.choice(self.routes)
         self.route_time = 0.0
         self.route_start = self.position.copy()
+        self.route_base_quaternion = self.quaternion.copy()
+        self.flight_segments += 1
 
     def _sample_route(self, seconds: float) -> tuple[np.ndarray, np.ndarray]:
         route = self.route
@@ -332,8 +350,15 @@ class FlightReplay:
             source_position[lo] * (1.0 - alpha)
             + source_position[hi] * alpha
         )
-        quaternion = _interpolate_quaternion(
+        raw_quaternion = _interpolate_quaternion(
             source_quaternion[lo], source_quaternion[hi], alpha
+        )
+        route_initial = _normalize_quaternion(source_quaternion[0])
+        relative_quaternion = _multiply_quaternion(
+            _inverse_quaternion(route_initial), raw_quaternion
+        )
+        quaternion = _multiply_quaternion(
+            self.route_base_quaternion, relative_quaternion
         )
         return position, quaternion
 
@@ -344,6 +369,7 @@ class FlightReplay:
             if self.state_time >= self.next_flight_delay:
                 self.state = TAKEOFF_STATE
                 self.state_time = 0.0
+                self.flight_segments = 0
                 self._choose_route()
 
         elif self.state == TAKEOFF_STATE:
@@ -359,6 +385,7 @@ class FlightReplay:
             if progress >= 1.0:
                 self.state = FLIGHT_STATE
                 self.state_time = 0.0
+                self.route_base_quaternion = self.quaternion.copy()
                 # The measured route starts at zero displacement. Offset its
                 # vertical origin so the first replay frame follows takeoff.
                 self.route_start = self.position.copy()
@@ -374,9 +401,12 @@ class FlightReplay:
             self.quaternion = quaternion
 
             if self.route_time >= self.route["duration"]:
-                self.state = LANDING_STATE
-                self.state_time = 0.0
-                self.route_start = self.position.copy()
+                if self.flight_segments < self.max_flight_segments:
+                    self._choose_route()
+                else:
+                    self.state = LANDING_STATE
+                    self.state_time = 0.0
+                    self.route_start = self.position.copy()
 
         elif self.state == LANDING_STATE:
             progress = min(self.state_time / 0.65, 1.0)
@@ -386,6 +416,7 @@ class FlightReplay:
                 self.state = GROUNDED_STATE
                 self.state_time = 0.0
                 self.next_flight_delay = random.uniform(0.8, 2.5)
+                self.max_flight_segments = random.randint(3, 5)
 
         return self.position.copy(), self.quaternion.copy(), self.state
 
