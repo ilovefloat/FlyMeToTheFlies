@@ -15,6 +15,7 @@ from flybody.fruitfly import fruitfly
 from flybody.tasks.flight_imitation import FlightImitationWBPG
 from flybody.tasks.pattern_generators import WingBeatPatternGenerator
 from flybody.tasks.trajectory_loaders import InferenceFlightTrajectoryLoader
+from flybody.tasks.task_utils import com2root
 
 
 WINDOW_WIDTH = 1100
@@ -268,11 +269,12 @@ class FlightReplay:
                 if len(qpos) < 2:
                     continue
 
-                relative_position = qpos[:, :3] - qpos[0, :3]
+                root_qpos = com2root(qpos[:, :3], qpos[:, 3:7])
+                relative_position = root_qpos[:, :3] - root_qpos[0, :3]
                 self.routes.append({
                     "id": route_id,
                     "position": relative_position,
-                    "quaternion": np.asarray(qpos[:, 3:7], dtype=np.float64),
+                    "quaternion": np.asarray(root_qpos[:, 3:7], dtype=np.float64),
                     "duration": (len(qpos) - 1) / SOURCE_SAMPLE_HZ,
                 })
 
