@@ -33,16 +33,49 @@ def normalize(v: np.ndarray) -> np.ndarray:
 
 
 def camera_quaternion(yaw: float, pitch: float) -> np.ndarray:
-    cy = math.cos(yaw * 0.5)
-    sy = math.sin(yaw * 0.5)
-    cp = math.cos(pitch * 0.5)
-    sp = math.sin(pitch * 0.5)
-    return np.array([cp * cy, -sp * sy, sp * cy, cp * sy], dtype=float)
+    # MuJoCo cameras look along their local -Z axis. Build the camera
+    # orientation from the desired world-space forward/right/up vectors.
+    forward = camera_forward(yaw, pitch)
+    right = np.array([math.cos(yaw), -math.sin(yaw), 0.0], dtype=float)
+    up = np.cross(right, forward)
+
+    rotation = np.column_stack((right, up, -forward))
+    trace = float(np.trace(rotation))
+
+    if trace > 0.0:
+        s = math.sqrt(trace + 1.0) * 2.0
+        w = 0.25 * s
+        x = (rotation[2, 1] - rotation[1, 2]) / s
+        y = (rotation[0, 2] - rotation[2, 0]) / s
+        z = (rotation[1, 0] - rotation[0, 1]) / s
+    elif rotation[0, 0] > rotation[1, 1] and rotation[0, 0] > rotation[2, 2]:
+        s = math.sqrt(1.0 + rotation[0, 0] - rotation[1, 1] - rotation[2, 2]) * 2.0
+        w = (rotation[2, 1] - rotation[1, 2]) / s
+        x = 0.25 * s
+        y = (rotation[0, 1] + rotation[1, 0]) / s
+        z = (rotation[0, 2] + rotation[2, 0]) / s
+    elif rotation[1, 1] > rotation[2, 2]:
+        s = math.sqrt(1.0 + rotation[1, 1] - rotation[0, 0] - rotation[2, 2]) * 2.0
+        w = (rotation[0, 2] - rotation[2, 0]) / s
+        x = (rotation[0, 1] + rotation[1, 0]) / s
+        y = 0.25 * s
+        z = (rotation[1, 2] + rotation[2, 1]) / s
+    else:
+        s = math.sqrt(1.0 + rotation[2, 2] - rotation[0, 0] - rotation[1, 1]) * 2.0
+        w = (rotation[1, 0] - rotation[0, 1]) / s
+        x = (rotation[0, 2] + rotation[2, 0]) / s
+        y = (rotation[1, 2] + rotation[2, 1]) / s
+        z = 0.25 * s
+
+    return np.array([w, x, y, z], dtype=float)
 
 
 def camera_forward(yaw: float, pitch: float) -> np.ndarray:
     cp = math.cos(pitch)
-    return np.array([cp * math.sin(yaw), cp * math.cos(yaw), math.sin(pitch)], dtype=float)
+    return np.array(
+        [cp * math.sin(yaw), cp * math.cos(yaw), math.sin(pitch)],
+        dtype=float,
+    )
 
 
 class Room(floors.Floor):
@@ -160,8 +193,8 @@ def build_environment():
         wbpg=wbpg,
         traj_generator=trajectory_loader,
         terminal_com_dist=float("inf"),
-        disable_legs=False,
-        floor_contacts=True,
+        disable_legs=True,
+        floor_contacts=False,
         initialize_qvel=True,
         force_actuators=False,
         joint_filter=0.0,
@@ -286,7 +319,14 @@ def main() -> None:
             env.physics.forward()
 
             action = np.zeros(env.action_spec().shape, dtype=env.action_spec().dtype)
-            env.step(action)
+            timestep = env.step(action)
+
+            # A flight episode terminates if the fly loses altitude or reaches
+            # the end of the reference trajectory. Restart the fly instead of
+            # leaving the game frozen on a terminal timestep.
+            if timestep.last():
+                env.reset()
+                set_swatter(env.physics, SWATTER_START)
 
             if attacking > 0.0:
                 fly_position = get_body_position(env.physics, "walker/thorax")
