@@ -34,6 +34,7 @@ RENDER_HEIGHT = 600
 
 SOURCE_SAMPLE_HZ = 5000.0
 GAME_SAMPLE_HZ = 60.0
+WING_PATTERN = Path(__file__).resolve().parent / "data" / "wing_pattern_fmech.npy"
 FLIGHT_DATA = (
     Path(__file__).resolve().parent
     / "data"
@@ -165,7 +166,7 @@ class Room(floors.Floor):
 
 def build_environment():
     arena = Room()
-    wbpg = WingBeatPatternGenerator()
+    wbpg = WingBeatPatternGenerator(base_pattern_path=str(WING_PATTERN))
 
     trajectory_loader = InferenceFlightTrajectoryLoader()
 
@@ -184,6 +185,15 @@ def build_environment():
         future_steps=0,
         trajectory_sites=False,
     )
+
+    # FlightImitation adds a ghost/reference fly and crosshair for training.
+    # They are not part of the game view.
+    for geom in task._ghost.mjcf_model.find_all("geom"):
+        rgba = list(geom.rgba or (1, 1, 1, 1))
+        rgba[3] = 0.0
+        geom.rgba = tuple(rgba)
+    for site in task._crosshair_sites:
+        site.remove()
 
     swatter = arena.mjcf_model.worldbody.add(
         "body", name="swatter", pos=tuple(SWATTER_START)
@@ -274,8 +284,8 @@ class FlightReplay:
 
                 # Fit each measured route into the room before replaying it.
                 # Clipping every frame would create abrupt stops at the walls.
-                safe_x = ROOM_HALF_X - 0.65
-                safe_y = ROOM_HALF_Y - 0.65
+                safe_x = ROOM_HALF_X - 0.90
+                safe_y = ROOM_HALF_Y - 0.90
                 max_x = float(np.max(np.abs(relative_position[:, 0])))
                 max_y = float(np.max(np.abs(relative_position[:, 1])))
                 scale_x = safe_x / max_x if max_x > safe_x else 1.0
